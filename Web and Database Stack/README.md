@@ -13,4 +13,4 @@ ARM Templates that deploys the following:
 
 2. One (1) Windows 2012 R2 Web Server with a public IP
 3. One (1) Windows 2012 R2 MS SQL Web Edition Server
-4. Approprivate storage accounts for virtual servers
+4. Appropriate storage accounts for virtual servers
