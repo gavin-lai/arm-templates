@@ -1,0 +1,483 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "defaultValue": "BDASVNet",
+      "metadata": {
+        "description": "Name for the new VNet."
+      }
+    },
+    "vnetPrefix": {
+      "type": "string",
+      "defaultValue": "192.168.0.0/16",
+      "metadata": {
+        "description": "CIDR prefix for the VNet address space."
+      }
+    },
+    "frontEndSubnetName": {
+      "type": "string",
+      "defaultValue": "FrontEnd",
+      "metadata": {
+        "description": "Name for the front end subnet."
+      }
+    },
+    "frontEndSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "192.168.1.0/24",
+      "metadata": {
+        "description": "CIDR address prefix for the front end subnet."
+      }
+    },
+    "backEndSubnetName": {
+      "type": "string",
+      "defaultValue": "BackEnd",
+      "metadata": {
+        "description": "Name for the back end subnet."
+      }
+    },
+    "backEndSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "192.168.2.0/24",
+      "metadata": {
+        "description": "CIDR address prefix for the back end subnet."
+      }
+    },
+    "frontEndNSGName": {
+      "type": "string",
+      "defaultValue": "NSG-FrontEnd",
+      "metadata": {
+        "description": "Name for the NSG used to allow access to web servers on port 80"
+      }
+    },
+    "backEndNSGName": {
+      "type": "string",
+      "defaultValue": "NSG-BackEnd",
+      "metadata": {
+        "description": "Name for the NSG used to allow remote RDP"
+      }
+    },
+    "webstorageType": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_ZRS",
+        "Standard_GRS",
+        "Standard_RAGRS",
+        "Premium_LRS"
+      ]
+    },
+    "sqlstorageType": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_ZRS",
+        "Standard_GRS",
+        "Standard_RAGRS",
+        "Premium_LRS"
+      ]
+    },
+    "WebServerName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "WebServerAdminUserName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "WebServerAdminPassword": {
+      "type": "securestring"
+    },
+    "WebServerWindowsOSVersion": {
+      "type": "string",
+      "defaultValue": "2012-R2-Datacenter",
+      "allowedValues": [
+        "2008-R2-SP1",
+        "2012-Datacenter",
+        "2012-R2-Datacenter",
+        "Windows-Server-Technical-Preview"
+      ]
+    },
+    "WebServerPublicIPDnsName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "SQLServerName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "SQLServerAdminUserName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "SQLServerAdminPassword": {
+      "type": "securestring"
+    },
+    "SQLVMSKU": {
+      "type": "string",
+      "defaultValue": "Web",
+      "allowedValues": [
+        "Web",
+        "Standard",
+        "Enterprise"
+      ]
+    }
+  },
+  "variables": {
+    "webstorageName": "[concat('webstorage', uniqueString(resourceGroup().id))]",
+    "sqlstorageName": "[concat('sqlstorage', uniqueString(resourceGroup().id))]",
+    "SQLDISK1": "[concat('http://',variables('sqlstorageName'),'.blob.core.windows.net/','vhds','/','dataDisk1.vhd')]",
+    "SQLDISK2": "[concat('http://',variables('sqlstorageName'),'.blob.core.windows.net/','vhds','/','dataDisk2.vhd')]",
+    "WebServerImagePublisher": "MicrosoftWindowsServer",
+    "WebServerImageOffer": "WindowsServer",
+    "WebServerOSDiskName": "WebServerOSDisk",
+    "WebServerVmSize": "Standard_D2_v2",
+    "WebServerVnetID": "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "WebServerSubnetRef": "[concat(variables('WebServerVnetID'), '/subnets/', parameters('frontEndSubnetName'))]",
+    "WebServerStorageAccountContainerName": "vhds",
+    "WebServerNicName": "[concat(parameters('WebServerName'), 'NetworkInterface')]",
+    "WebServerPublicIPName": "WebServerPublicIP",
+    "SQLServerImagePublisher": "MicrosoftSQLServer",
+    "SQLServerImageOffer": "SQL2014SP1-WS2012R2",
+    "SQLServerOSDiskName": "SQLServerOSDisk",
+    "SQLServerVmSize": "Standard_D2_v2",
+    "SQLServerVnetID": "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "SQLServerSubnetRef": "[concat(variables('SQLServerVnetID'), '/subnets/', parameters('backEndSubnetName'))]",
+    "SQLServerStorageAccountContainerName": "vhds",
+    "SQLServerNicName": "[concat(parameters('SQLServerName'), 'NetworkInterface')]"
+  },
+  "resources": [
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[parameters('backEndNSGName')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "NSG - Remote Access"
+      },
+      "properties": {
+        "securityRules": [
+          {
+            "name": "allow-frontend",
+            "properties": {
+              "description": "Allow FE Subnet",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "1433",
+              "sourceAddressPrefix": "[parameters('frontEndSubnetPrefix')]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "block-internet",
+            "properties": {
+              "description": "Block Internet",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Deny",
+              "priority": 200,
+              "direction": "Outbound"
+            }
+          }
+
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[parameters('frontEndNSGName')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "NSG - Front End"
+      },
+      "properties": {
+        "securityRules": [
+          {
+            "name": "rdp-rule",
+            "properties": {
+              "description": "Allow RDP",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "web-rule",
+            "properties": {
+              "description": "Allow WEB",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 101,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[parameters('vnetName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/networkSecurityGroups/', parameters('frontEndNSGName'))]",
+        "[concat('Microsoft.Network/networkSecurityGroups/', parameters('backEndNSGName'))]"
+      ],
+      "tags": {
+        "displayName": "VNet"
+      },
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('vnetPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[parameters('frontEndSubnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('frontEndSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('frontEndNSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[parameters('backEndSubnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('backEndSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('backEndNSGName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[variables('webstorageName')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [],
+      "tags": {
+        "displayName": "webstorage"
+      },
+      "properties": {
+        "accountType": "[parameters('webstorageType')]"
+      }
+    },
+    {
+      "name": "[variables('sqlstorageName')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [],
+      "tags": {
+        "displayName": "sqlstorage"
+      },
+      "properties": {
+        "accountType": "[parameters('sqlstorageType')]"
+      }
+    },
+    {
+      "name": "[variables('WebServerNicName')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2016-03-30",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('WebServerPublicIPName'))]"
+      ],
+      "tags": {
+        "displayName": "WebServerNic"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('WebServerSubnetRef')]"
+              },
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('WebServerPublicIPName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[parameters('WebServerName')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('webstorageName'))]",
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('WebServerNicName'))]"
+      ],
+      "tags": {
+        "displayName": "WebServer"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[variables('WebServerVmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[parameters('WebServerName')]",
+          "adminUsername": "[parameters('WebServerAdminUsername')]",
+          "adminPassword": "[parameters('WebServerAdminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('WebServerImagePublisher')]",
+            "offer": "[variables('WebServerImageOffer')]",
+            "sku": "[parameters('WebServerWindowsOSVersion')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "WebServerOSDisk",
+            "vhd": {
+              "uri": "[concat(reference(resourceId('Microsoft.Storage/storageAccounts', variables('webstorageName')), '2016-01-01').primaryEndpoints.blob, variables('WebServerStorageAccountContainerName'), '/', variables('WebServerOSDiskName'), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('WebServerNicName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "[variables('WebServerPublicIPName')]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2016-03-30",
+      "dependsOn": [],
+      "tags": {
+        "displayName": "WebServerPublicIP"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[parameters('WebServerPublicIPDnsName')]"
+        }
+      }
+    },
+    {
+      "name": "[variables('SQLServerNicName')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2016-03-30",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+      ],
+      "tags": {
+        "displayName": "SQLServerNic"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('SQLServerSubnetRef')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[parameters('SQLServerName')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('sqlstorageName'))]",
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('SQLServerNicName'))]"
+      ],
+      "tags": {
+        "displayName": "SQLServer"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[variables('SQLServerVmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[parameters('SQLServerName')]",
+          "adminUsername": "[parameters('SQLServerAdminUsername')]",
+          "adminPassword": "[parameters('SQLServerAdminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('SQLServerImagePublisher')]",
+            "offer": "[variables('SQLServerImageOffer')]",
+            "sku": "[parameters('SQLVMSKU')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "SQLServerOSDisk",
+            "vhd": {
+              "uri": "[concat(reference(resourceId('Microsoft.Storage/storageAccounts', variables('sqlstorageName')), '2016-01-01').primaryEndpoints.blob, variables('SQLServerStorageAccountContainerName'), '/', variables('SQLServerOSDiskName'), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          },
+          "dataDisks": [
+            {
+              "name": "datadisk1",
+              "diskSizeGB": "1023",
+              "lun": 0,
+              "vhd": { "uri": "[variables('SQLDISK1')]" },
+              "createOption": "Empty"
+            },
+            {
+              "name": "datadisk2",
+              "diskSizeGB": "1023",
+              "lun": 1,
+              "vhd": { "uri": "[variables('SQLDISK2')]" },
+              "createOption": "Empty"
+            }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('SQLServerNicName'))]"
+            }
+          ]
+        }
+      }
+    }
+
+
+  ]
+}
